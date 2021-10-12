@@ -1,0 +1,470 @@
+---
+title: "COVID-19 Data Analysis Report"
+date: "October 1, 2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(error = TRUE, echo = TRUE, fig.align = 'center', cache = FALSE, cache.lazy = FALSE, message = FALSE, warning = FALSE, fig.pos = "h", error = FALSE, comment = NA)
+```
+
+
+```{r echo = FALSE}
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(stringr)) install.packages("stringr")
+if(!require(scales)) install.packages("scales")
+if(!require(caret)) install.packages("caret")
+if(!require(rpart)) install.packages("rpart")
+if(!require(randomForest)) install.packages("randomForest")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(ggridges)) install.packages("ggridges")
+if(!require(lubridate)) install.packages("lubridate")
+if(!require(leaflet)) install.packages("leaflet")
+if(!require(mapview)) install.packages("mapview"); webshot::install_phantomjs()
+if(!require(kableExtra)) install.packages("kableExtra")
+```
+
+```{r echo = TRUE}
+options(digits = 5)
+```
+
+## Load and Read Files
+
+
+```{r echo = TRUE}
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_US.csv", "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv", "time_series_covid19_deaths_global.csv","time_series_covid19_recovered_global.csv")
+urls <- str_c(url_in,file_names)
+urls
+```
+
+
+```{r echo = TRUE}
+US_Cases <- read_csv(urls[1])
+Global_Cases <- read_csv(urls[2])
+US_Deaths <- read_csv(urls[3])
+Global_Deaths <- read_csv(urls[4])
+
+```
+
+
+## Clean Data
+```{r echo = TRUE}
+Global_Cases <- Global_Cases%>%
+    pivot_longer(cols= -c('Province/State', 'Country/Region', Lat, Long),
+                 names_to ="date",
+                 values_to = "cases") %>%
+    select(-c(Lat,Long))
+
+Global_Deaths <- Global_Deaths%>%
+    pivot_longer(cols= -c('Province/State', 'Country/Region', Lat, Long),
+                 names_to ="date",
+                 values_to = "deaths") %>%
+    select(-c(Lat,Long))
+
+
+US_Cases <- US_Cases%>%
+    pivot_longer(cols= -(UID:Combined_Key),
+                  names_to = "date",
+                  values_to = "cases") %>%
+    select(Admin2:cases) %>%
+    select(-c(Lat,Long_))
+
+US_Deaths <- US_Deaths%>%
+    pivot_longer(cols= -(UID:Population),
+                  names_to = "date",
+                  values_to = "deaths") %>%
+    select(Admin2:deaths) %>%
+    select(-c(Lat,Long_))
+
+
+Global_Cases$date <- date(mdy(Global_Cases$date))
+Global_Deaths$date <- date(mdy(Global_Deaths$date))
+US_Cases$date <- date(mdy(US_Cases$date))
+US_Deaths$date <- date(mdy(US_Deaths$date))
+```
+
+## Explore some of the values of the columns in Global Cases
+```{r echo = TRUE}
+# proportion of NA's to the number of rows in the data set
+sum(is.na(Global_Cases$date))/nrow(Global_Cases)
+
+#Explore some of the values of the columns Global Cases
+min(Global_Cases$date)
+max(Global_Cases$date)
+min(Global_Cases$cases)
+max(Global_Cases$cases)
+```
+
+## Explore some of the values of the columns in US Cases
+```{r echo = TRUE}
+# proportion of NA's to the number of rows in the data set
+sum(is.na(US_Cases$date))/nrow(US_Cases)
+
+#Explore some of the values of the columns in US Cases
+min(US_Cases$date)
+max(US_Cases$date)
+min(US_Cases$cases)
+max(US_Cases$cases)
+```
+
+## Explore some of the values of the columns in Global Deaths
+```{r echo = TRUE}
+# proportion of NA's to the number of rows in the data set
+sum(is.na(Global_Deaths$date))/nrow(Global_Deaths)
+
+#Explore some of the values of the columns Global Deaths
+min(Global_Deaths$date)
+max(Global_Deaths$date)
+min(Global_Deaths$deaths)
+max(Global_Deaths$deaths)
+```
+
+
+
+
+
+## Explore some of the values of the columns in US Deaths
+```{r echo = TRUE}
+# proportion of NA's to the number of rows in the data set
+sum(is.na(US_Deaths$date))/nrow(US_Deaths)
+
+#Explore some of the values of the columns US Deaths
+min(US_Deaths$date)
+max(US_Deaths$date)
+min(US_Deaths$Population)
+max(US_Deaths$Population)
+min(US_Deaths$deaths)
+max(US_Deaths$deaths)
+```
+
+
+## Joining data sets and Transforming
+
+```{r echo = TRUE}
+
+Global <- Global_Cases %>%
+    full_join(Global_Deaths) %>%
+    rename(Country_Region = 'Country/Region',
+           Province_State = 'Province/State')
+# Filter to cases > 0
+Global <- Global %>% filter(cases > 0)
+
+#Checking data after the join that it matches the data before we joined it      
+summary(Global)
+
+```
+
+
+
+
+```{r echo = TRUE}
+US <- US_Cases %>%
+  full_join(US_Deaths)
+ 
+#Checking data after the join that it matches the data before we joined it 
+summary(US)
+
+```
+
+
+
+```{r echo = TRUE}
+
+Global <- Global %>%
+    unite("Combined_Key", c(Province_State,Country_Region),
+          sep = ",",
+          na.rm = TRUE,
+          remove = FALSE)
+```
+
+
+```{r echo = TRUE}
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+```
+
+
+```{r echo = TRUE}
+uid <- read_csv(uid_lookup_url) %>%
+    select(-c(Lat,Long_,Combined_Key,code3,iso2,iso3,Admin2))
+
+Global <- Global %>%
+    left_join(uid, by = c("Province_State","Country_Region")) %>%
+    select(-c(UID, FIPS)) %>%
+    select(Province_State,Country_Region, date, cases, deaths, Population, Combined_Key)
+
+```
+```{r echo = TRUE}
+Global_totals<- Global %>%
+    group_by(Province_State,Country_Region,date) %>%
+    summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+    mutate(new_cases = cases - lag(cases) ,
+           new_deaths = deaths - lag(deaths))
+```
+
+```{r echo = TRUE}
+Global_totals
+```
+
+
+```{r echo = TRUE}
+US_by_State <- US %>%
+    group_by(Province_State,Country_Region,date) %>%
+    summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+    mutate(deaths_per_mill = deaths * 1000000/ Population ) %>%
+    select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+    ungroup()
+US_by_State
+```
+```{r echo = TRUE}
+US_totals <- US_by_State %>%
+    group_by(Country_Region, date) %>%
+    summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+    mutate(deaths_per_mill = deaths * 1000000/ Population ) %>%
+    select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+    ungroup()
+
+tail(US_totals)
+
+```
+
+
+
+
+
+## Analyzing and Visualizations
+
+```{r echo = TRUE}
+
+US_by_State <- US_by_State %>%
+    mutate(new_cases = cases - lag(cases),
+           new_deaths = deaths - lag(deaths))
+
+US_totals <- US_totals %>%
+    mutate(new_cases = cases - lag(cases),
+           new_deaths = deaths - lag(deaths))
+
+tail(US_totals)
+
+```
+
+
+```{r echo = TRUE}
+#with new_cases added trends to COVID-19 in US
+US_totals %>%
+    filter(cases > 0) %>%
+    ggplot(aes(x = date, y = new_cases)) +
+    geom_line(aes(color = "new_cases")) +
+    geom_point(aes(color = "new_cases")) + 
+    geom_line(aes(y = new_deaths, color = "new_deaths")) +
+    geom_point(aes(y = new_deaths, color ="new_deaths")) +
+    scale_y_log10() +
+    theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+    labs(title = "COVID-19 in US" , y = NULL)
+
+```
+
+```{r echo = TRUE}
+US_cases <- ggplot(US_totals, 
+ aes(date, as.numeric(new_cases))) +
+ geom_col(fill = "blue", alpha = 0.6) + 
+ theme_minimal(base_size = 14) +
+ xlab(NULL) + ylab(NULL) + 
+ scale_x_date(date_labels = "%Y/%m/%d")
+
+```
+
+
+```{r echo = TRUE}
+US_cases + labs(title = "COVID-19 Daily Cases in the US" , y = NULL)
+
+```
+
+
+```{r echo = TRUE}
+US_deaths <- ggplot(US_totals, 
+ aes(date, as.numeric(new_deaths))) +
+ geom_col(fill = "purple", alpha = 0.6) + 
+ theme_minimal(base_size = 14) +
+ xlab(NULL) + ylab(NULL) + 
+ scale_x_date(date_labels = "%Y/%m/%d")
+
+ US_deaths + labs(title = "COVID-19 Daily Deaths in the US" , y = NULL)
+
+```
+
+```{r echo = TRUE}
+#with new_cases added trends to COVID-19 by State
+state <- "California"
+US_by_State %>%
+    filter(Province_State == state) %>%
+    filter(cases > 0) %>%
+    ggplot(aes(x = date, y = new_cases)) +
+    geom_line(aes(color = "new_cases")) +
+    geom_point(aes(color = "new_cases")) +
+    geom_line(aes(y = new_deaths, color = "new_deaths")) +
+    geom_point(aes(y = new_deaths, color ="new_deaths")) +
+    scale_y_log10() +
+    theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+    labs(title = str_c("COVID-19 in ", state), y = NULL)
+```
+
+```{r echo = TRUE}
+US_state_totals <- US_by_State %>%
+    group_by(Province_State) %>%
+    summarize(deaths = max(deaths), cases = max(cases), population = max(Population), 
+              cases_per_thou = 1000 * cases /population, deaths_per_thou = 1000 * deaths/population) %>%
+    filter(cases > 0, population > 0)
+
+US_state_totals %>% 
+    slice_min(deaths_per_thou, n = 10)
+  
+US_state_totals %>% 
+    slice_max(deaths_per_thou, n = 10)
+
+
+```
+
+## Comparing Multiple Countries
+```{r echo = TRUE}
+# Now lets add in a few more countries
+
+china <- Global_totals[Global_totals$Country_Region == 'China',]
+spain <- Global_totals[Global_totals$Country_Region == 'Spain',]
+UK <- Global_totals[Global_totals$Country_Region == 'United Kingdom',]
+
+USplot <- ggplot(US_totals, 
+ aes(date, as.numeric(new_cases))) +
+ geom_col(fill = 'blue', alpha = 0.6) + 
+ theme_minimal(base_size =12) +
+ xlab(NULL) + ylab(NULL) + 
+ scale_x_date(date_labels = "%Y/%m/%d")
+
+China_US <- USplot + geom_col(data = china, 
+ aes(date, as.numeric(new_cases)),
+ fill='red',
+ alpha = 0.5)
+
+Ch_US_Sp <- China_US + geom_col(data = spain, 
+ aes(date, as.numeric(new_cases)),
+ fill='#E69F00',
+ alpha = 0.4)
+
+Chn_US_Sp_UK <- Ch_US_Sp + geom_col(data = UK, 
+ aes(date, as.numeric(new_cases)),
+ fill='#009E73',
+ alpha = 0.9)
+
+Chn_US_Sp_UK + labs(title= "China, US, UK, & Spain")
+```
+
+
+### Modeling
+## SIR Model
+
+```{r echo = TRUE}
+
+state <- "California"
+California <- US_by_State %>%
+    filter(Province_State == state) %>%
+    filter(cases > 0) 
+    
+```
+
+```{r echo = TRUE}
+#SIR Model
+
+SIR <- function(time, state, parameters) {
+  par <- as.list(c(state, parameters))
+  with(par, {
+    dS <- -beta * I * S/N
+    dI <- beta * I * S/N - gamma * I
+    dR <- gamma * I
+    list(c(dS, dI, dR))
+  })
+}
+
+```
+
+```{r echo = TRUE}
+#create a vector of cumulative cases
+
+infected <- California %>%
+    filter(cases >0) %>%
+    pull(new_cases)
+
+```
+
+```{r echo = TRUE}
+# Create an incrementing Day vector the same length as our cases vector
+day <- 1:(length(infected))
+N <- 14446515
+#specify initial values for S, I, R
+init <- c(S = N - infected[1], I = infected[1], R = 0)
+
+RSS <- function(parameters) {
+  names(parameters) <- c("beta", "gamma")
+  out <- ode(y = init, times = day, func = SIR, parms = parameters)
+  fit <- out[, 3]
+  sum((infected - fit)^2)
+}
+
+```
+
+```{r echo = TRUE}
+# now find the values of beta and gamma that give the
+# smallest RSS, which represents the best fit to the data.
+# Start with values of 0.5 for each, and constrain them to
+# the interval 0 to 1.0
+library(deSolve)
+optimization <- optim(c(0.5, 0.5), RSS, method = "L-BFGS-B", lower = c(0,0), upper = c(1, 1))
+
+# check for convergence
+optimization$message
+
+# Optimization Parameters
+opt_par <- setNames(optimization$par, c("beta", "gamma"))
+opt_par
+
+# Reproduction Number
+R0 <- opt_par[1]/opt_par[2]
+R0
+```
+
+# Prediction
+```{r echo = TRUE}
+# time in days for predictions
+startdate <- min(California$date)
+t <- 1:150
+# get the fitted values from our SIR model
+fittedcum <- data.frame(ode(y = init, times = t, func = SIR, parms = opt_par))
+# add a Date column and join the observed incidence data
+fittedcum <- fittedcum %>%
+    mutate(date = as.Date(startdate) + t-1)%>%
+             left_join(California %>% select(date,new_cases))
+```
+
+
+
+```{r echo = TRUE}
+
+# plot the data
+ggplot(fittedcum, aes(x = date)) +
+  geom_line(aes(y = I), colour = "red") +
+  geom_line(aes(y = S), colour = "black") +
+  geom_line(aes(y = R), colour = "green") +
+  geom_point(aes(y = new_cases), colour = "orange") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(y = "Persons", title = "COVID-19 fitted vs observed cumulative incidence, California") +
+  scale_colour_manual(name = "",
+                      values = c(red = "red", black = "black", green = "green", orange = "orange"),
+                      labels = c("Susceptible", "Recovered", "Observed incidence", "Infectious")) +
+  scale_y_continuous(trans="log10")
+
+```
+
+
+## Bias
+Some Bias is that I decided to analyze the state of California in more detail since I reside there. As for bias that may exist in the data would be in regards to how accurately cases are reported Globally and even state-wide. Thus, that is why I decided to focus on the state I currently reside in as it was of great interest to me. 
