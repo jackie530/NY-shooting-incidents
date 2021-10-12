@@ -1,0 +1,377 @@
+---
+title: "NY Shooting Incidents Data Set"
+date: "September 24, 2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(error = TRUE, echo = TRUE, fig.align = 'center', cache = FALSE, cache.lazy = FALSE, message = FALSE, warning = FALSE, fig.pos = "h", error = FALSE, comment = NA)
+```
+
+```{r echo = FALSE}
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(stringr)) install.packages("stringr")
+if(!require(scales)) install.packages("scales")
+if(!require(caret)) install.packages("caret")
+if(!require(rpart)) install.packages("rpart")
+if(!require(randomForest)) install.packages("randomForest")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(ggridges)) install.packages("ggridges")
+if(!require(lubridate)) install.packages("lubridate")
+if(!require(leaflet)) install.packages("leaflet")
+if(!require(mapview)) install.packages("mapview"); webshot::install_phantomjs()
+if(!require(kableExtra)) install.packages("kableExtra")
+```
+
+```{r echo = TRUE}
+options(digits = 5)
+```
+## Load and Read CSV file
+```{r echo = TRUE}
+dl <- tempfile()
+download.file("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD", dl)
+dat <- read_csv(dl)
+file.remove(dl)
+rm(dl)
+
+
+# seeing and counting which columns have NA's
+sum(is.na(dat$BORO))
+sum(is.na(dat$PRECINCT))
+sum(is.na(dat$JURISDICTION_CODE))
+sum(is.na(dat$LOCATION_DESC))
+sum(is.na(dat$STATISTICAL_MURDER_FLAG))
+sum(is.na(dat$PERP_AGE_GROUP))
+sum(is.na(dat$PERP_SEX))
+sum(is.na(dat$PERP_RACE))
+sum(is.na(dat$VIC_AGE_GROUP))
+sum(is.na(dat$VIC_SEX))
+sum(is.na(dat$VIC_RACE))
+# proportion of NA's to the number of rows in the data set
+sum(is.na(dat$JURISDICTION_CODE))/nrow(dat)
+sum(is.na(dat$LOCATION_DESC))/nrow(dat)
+sum(is.na(dat$PERP_AGE_GROUP))/nrow(dat)
+sum(is.na(dat$PERP_SEX))/nrow(dat)
+sum(is.na(dat$PERP_RACE))/nrow(dat)
+
+
+#remove the rows in jurisdiction code with NA because it has a small enough
+# proportion to the data set, however, the columns location_desc, perp_age_group,
+# perp_sex and perp_race have too high of a proportion to the dataset. 
+# removing na rows in jurisdiction code
+dat <- dat[!is.na(dat$JURISDICTION_CODE),]
+# make date into correct type
+dat$OCCUR_DATE <- date(mdy(dat$OCCUR_DATE))
+# remove a unnecessary columns
+dat <- dat %>% select(-INCIDENT_KEY,
+                      -Lon_Lat,
+                      -X_COORD_CD,
+                      -Y_COORD_CD,
+                      -LOCATION_DESC,
+                      -PERP_AGE_GROUP,
+                      -PERP_SEX,
+                      -PERP_RACE)
+# make vic_race factor
+dat$VIC_RACE <- factor(dat$VIC_RACE)
+
+## CREATING WORKING AND VALIDATION SETS ##
+library("caret")
+y <- dat$VIC_RACE
+set.seed(212, sample.kind = "Rounding")
+validation_index <- createDataPartition(y, times = 1, p = 0.15, list = FALSE)
+validation <- dat %>% slice(validation_index)
+dat <- dat %>% slice(-validation_index)
+```
+\newpage
+## Summary
+
+Exploring the NYPD Shooting Incident (Historic) Data set. During the exploratory analysis, found a number of missing values in 4 columns: Location Description, Perpetrator Age Group, Perpetrator Sex, and Perpetrator Race. Due to their high proportion to the overall data set, I did not feel comfortable replacing the missing the values with the mean/mode nor was I comfortable with removing the entire row.After cleaning the data, I explored the data by looking at counts, proportions, and proportion of deaths in shooting incidents. I then visualized these insights in the following section before diving further into distributions and probabilities of the data set.
+
+\newpage
+# Exploratory Data Analysis
+
+## Preliminary Data Exploration
+The overall NYPD Shooting Incident Data set has `r nrow(dat) + nrow(validation)` rows.
+
+`r ncol(dat)` columns in the data:
+
+- OCCUR_DATE ```<date>``` contains the date of the shooting incident.
+- OCCUR_TIME ```<time>``` contains the time of the shooting incident.
+- BOROUGH ```<character>``` contains the borough for where the shooting incident took place in New York City.
+- PRECINCT ```<numeric>``` contains the NYPD precinct that responded to the shooting incident.
+- JURISDICTION_CODE ```<numeric>``` contains the jurisdiction code with respect to the shooting incident.
+- STATISTICAL_MURDER_FLAG ```<logical>``` contains TRUE for a shooting incident causing death and FALSE fora nonfatal shooting incident.
+- VIC_AGE_GROUP ```<character>``` contains age ranges for which the victim of the shooting incident belongs to.
+- VIC_SEX ```<character>``` contains genders for which the victim of the shooting incident belongs to.
+- VIC_RACE ```<factor>``` contains races for which the victim of the shooting incident belongs to. This is the variable we are interested in predicting.
+- Longitude ```<numeric>``` contains the longitudinal geographic coordinate for the shooting incident.
+- Latitude ```<numeric>``` contains the latitudinal geographic coordinate for the shooting incident.
+
+\newpage
+Explore some of the values in the columns:
+
+- `r min(dat$OCCUR_DATE)` is the earliest shooting incident date as found in OCCUR_DATE.
+- `r max(dat$OCCUR_DATE)` is the latest shooting incident date as found in OCCUR_DATE. 
+- `r unique(dat$BORO)` are all the different boroughs in New York City under the BORO column.
+- `r unique(dat$PRECINCT)` are all the different precincts in New York City under the PRECINCT column.
+- `r unique(dat$JURISDICTION_CODE)` are the jurisdiction codes in New York City under JURISDICTION_CODE.
+- `r unique(dat$VIC_AGE_GROUP)` are the different age groups related to victims of shooting incidents in VIC_AGE_GROUP.
+- `r unique(dat$VIC_SEX)` are the different genders related to victims of shooting incidents in VIC_SEX.
+- `r unique(dat$VIC_RACE)` are the different races related to victims of shooting incidents in VIC_RACE.
+- `r mean(dat$STATISTICAL_MURDER_FLAG)` is the proportion of deaths caused by shooting incidents in STATISTICAL_MURDER_FLAG.
+
+\newpage
+## Advanced Data Exploration and Analysis
+
+### Shooting Incidents grouped by Borough
+
+Interested to see if there is a borough more likely to have shooting incidents and whether or not those shooting incidents are more likely to result in death. 
+```{r echo = TRUE}
+boro_incidents <- dat %>%
+  group_by(BORO) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+boro_incidents %>%
+  arrange(desc(count)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+### Top 10 Shooting Incidents grouped by Precinct
+
+Now explore which precincts have the most shooting incidents in New York City? Are some precinct shooting incidents more likely to result in death than others? Observe the top 10 precincts invovled in shooting incidents.
+```{r echo = TRUE}
+precinct_incidents <- dat %>%
+  group_by(PRECINCT) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+precinct_incidents %>%
+  arrange(desc(count)) %>%
+  top_n(10) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+### Shooting Incidents grouped by Jurisdiction Code
+
+How are shooting incidents related to jurisdiction codes? Are certain jurisdiction codes more involved in shooting incidents?
+```{r echo = TRUE}
+jurisdiction_incidents <- dat %>%
+  group_by(JURISDICTION_CODE) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+jurisdiction_incidents %>%
+  arrange(desc(count)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+
+### Shooting Incidents grouped by Victim Age Group
+
+What age groups are more likely to be involved in shooting incidents? Explore the age groups and the number of shooting incidents, proportion to total shooting incidents, and proportion to death.
+```{r echo = TRUE}
+victim_age_incidents <- dat %>%
+  group_by(VIC_AGE_GROUP) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+victim_age_incidents %>%
+  arrange(desc(count)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+### Shooting Incidents grouped by Victim Sex
+
+Is one gender more likely to be involved in shooting incidents? Look at all genders and their involvement in shooting incidents.
+```{r echo = TRUE}
+victim_sex_incidents <- dat %>%
+  group_by(VIC_SEX) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+victim_sex_incidents %>%
+  arrange(desc(count)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+### Shooting Incidents grouped by Victim Race
+
+What is the relationship between victim race and shooting incidents? Are some races more likely to be involved in shooting incidents compared to others? Are some races more likely to die?
+```{r echo = TRUE}
+victim_race_incidents <- dat %>%
+  group_by(VIC_RACE) %>%
+  summarize(count = n(), 
+            prop = count/nrow(dat),
+            prop_death = mean(STATISTICAL_MURDER_FLAG))
+victim_race_incidents %>%
+  arrange(desc(count)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+```
+
+\newpage
+# Data Visualization
+
+## Distribution Plots
+
+Looking at the distribution of shooting incidents by occurrence date. This gives us a better idea of when shooting incidents were more likely to occur historically and if there is a sesonality effect.
+```{r echo = TRUE}
+dat %>%
+  ggplot(aes(x = OCCUR_DATE)) + 
+  geom_histogram(bins = 48) +
+  xlab("Occur Date") +
+  ylab("Count of Shooting Incidents") +
+  ggtitle("Distribution of Shooting Incidents by Date of Occurence")
+```
+
+Distribution of shooting incidents grouped by occurrence time. Most values tend to center around midnight, below is a visualization of the findings. 
+```{r echo = TRUE}
+justtime <- function(x, split=12) {
+  h <- as.numeric(strftime(x, "%H"))
+  y <- as.POSIXct(paste(ifelse(h<split, "2015-01-02","2015-01-01"),strftime(x, "%H:%M:%S")))
+}
+dat %>% 
+  mutate(time = justtime(OCCUR_TIME)) %>%
+  ggplot(aes(time)) + 
+  geom_histogram(bins = 48) + 
+  scale_x_datetime(labels = function(x) format(x, format = "%H:%M")) + 
+  xlab("Occur Time") +
+  ylab("Count of Shooting Incidents") +
+  ggtitle("Distribution of Shooting Incidents by Time of Occurrence")
+```
+
+## Visualizing the findings by victim Age group.
+```{r echo = TRUE}
+victim_age_incidents %>%
+  ggplot(aes(VIC_AGE_GROUP, y = count, fill = VIC_AGE_GROUP)) +
+  geom_bar(stat = "identity") +
+  ylab("Number of Shooting Incidents") +
+  xlab("Victim Age Group") +
+  ggtitle("Number of Shooting Incidents Grouped By Victim Age Group") +
+  theme(legend.position = "none")
+```
+## Visualizing the findings by victim Sex.
+```{r echo = TRUE}
+victim_sex_incidents %>%
+  ggplot(aes(reorder(VIC_SEX, -count), y = count, fill = VIC_SEX)) +
+  geom_bar(stat = "identity") +
+  ylab("Number of Shooting Incidents") +
+  xlab("Victim Sex") +
+  ggtitle("Number of Shooting Incidents Grouped By Victim Sex") +
+  theme(legend.position = "none")
+```
+## Visualizing the findings by victim race.
+```{r echo = TRUE}
+victim_race_incidents %>% 
+  ggplot(aes(count, y = reorder(VIC_RACE, - count), fill = VIC_RACE)) +
+  geom_bar(stat = "identity") +
+  ylab("Victim Race") +
+  xlab("Number of Shooting Incidents") +
+  ggtitle("Number of Shooting Incidents Grouped By Victim Race") +
+  theme(legend.position = "none")
+```
+
+\newpage
+# Distribution & Probability Analysis
+
+## Density Distributions
+
+### Shooting Incidents over Occurrence Hour
+
+We will now stratify the occurrence time into occurrence hour centered around midnight and then we plot a density plot to see what times shooting incidents most likely happen. We see that most shootings happen at or before midnight and shootings rarely occur past 5 am.
+```{r echo = TRUE}
+dat %>%
+  mutate(hour = ifelse(hour(OCCUR_TIME) > 12, hour(OCCUR_TIME) - 24, hour(OCCUR_TIME))) %>%
+  group_by(hour) %>%
+  ggplot(aes(x = hour)) + 
+  geom_density() +
+  xlab("Hour") +
+  ylab("Probability") +
+  ggtitle("Density Plot of Shooting Incidents over Occurrence Hour")
+```
+
+\newpage
+### Shooting Incidents over Occurence Hour split by Victim Race
+
+Now let's explore if any one race tends to have a more distinct time for when a shooting incident is to occur. As we can see visually, there tends to be no difference between races, however, we can note that ```AMERICAN INDIAN/ALASKAN NATIVE``` has a lower likelihood at around evening time.
+```{r echo = TRUE}
+dat %>%
+  mutate(hour = ifelse(hour(OCCUR_TIME) > 12, hour(OCCUR_TIME) - 24, hour(OCCUR_TIME))) %>%
+  group_by(hour, VIC_RACE) %>%
+  ggplot(aes(x = hour, y = VIC_RACE)) +
+  geom_density_ridges(aes(fill = VIC_RACE), alpha = 0.55) +
+  xlab("Hour") +
+  ylab("Probability") +
+  ggtitle("Density Plot of Shooting Incidents by Victim Race over Occurence Hour") +
+  theme(legend.position = "none")
+```
+
+### Murder and Victim Race
+
+Is one race more likely to be murdered in the even of a shooting? We group the data by victim race to find out. Across all races except ```AMERICAN INDIAN/ALASKAN NATIVE```, murder rates tend to be similar. ```AMERICAN INDIAN/ALASKAN NATIVE``` is the only victim race to have no murders from shootings.
+```{r echo = TRUE}
+race_by_murder <- dat %>%
+  group_by(VIC_RACE, STATISTICAL_MURDER_FLAG) %>%
+  summarize(count = n()) %>%
+  mutate(prob = count / sum(count))
+race_by_murder %>%
+  arrange(desc(prob)) %>%
+  knitr::kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                 position = "center",
+                 font_size = 10,
+                 full_width = FALSE,
+                 latex_options = "HOLD_position")
+race_by_murder %>%
+  ggplot(aes(prob, VIC_RACE, fill = STATISTICAL_MURDER_FLAG)) +
+  geom_bar(stat = "identity") +
+  xlab("Probability of Murder") +
+  ylab("Victim Race") +
+  ggtitle("Likelihood of Murder given the Victim's Race") +
+  guides(fill = guide_legend(title = "Murder"))
+```
+
+\newpage
+### Conclusion
+
+To conclude, the data showed us that most shootings happen at or before midnight and shootings rarely occur past 5 am. We also see shooting incidents rise in 2020 and 0.19058 is the proportion of deaths caused by shooting incidents. When looking at victims' demographics 0.90578 are male and 0.71490 are Black. I was not able to explore the location description since the proportion of NA's was high but it would have been interesting to see where the shooting incidents are occuring such as public spaces or private homes, etc. 
+
+## Bias
+My personal bias regarding this topic was influenced by news and I thought most shooting incidents would occur in Queens or the Bronx along with thinking most shooting incidents would be male. What I did to mitigate this prior bias is to let the data speak for itself and exploring the data from all angles. Therefore, with that in mind I was actually able to find that majority of the shooting incidents occur in Brooklyn as opposed to what I thought. It was great letting the data be able to tell a story and prove some of my bias wrong.
+
+
+
+
+
